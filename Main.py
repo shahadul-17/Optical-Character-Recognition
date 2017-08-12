@@ -1,160 +1,144 @@
-import os
+# TrainAndTest.py
+
 import cv2
-import numpy
+import numpy as np
+import operator
+import os
 
-from OCREngine import OCREngine
+# module level variables ##########################################################################
+MIN_CONTOUR_AREA = 100
 
-if __name__ == '__main__':
-    ocrEngine = OCREngine()
+RESIZED_IMAGE_WIDTH = 20
+RESIZED_IMAGE_HEIGHT = 30
 
-    ref = cv2.imread("data\\OCR-A.jpg")
-    ref = cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY)
-    ref = cv2.threshold(ref, 10, 255, cv2.THRESH_BINARY_INV)[1]
+###################################################################################################
+class ContourWithData():
 
-    refCnts = cv2.findContours(ref.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # member variables ############################################################################
+    npaContour = None           # contour
+    boundingRect = None         # bounding rect for contour
+    intRectX = 0                # bounding rect top left corner x location
+    intRectY = 0                # bounding rect top left corner y location
+    intRectWidth = 0            # bounding rect width
+    intRectHeight = 0           # bounding rect height
+    fltArea = 0.0               # area of contour
 
-    if cv2.__version__.startswith("2."):
-        refCnts = refCnts[0]
-    else:
-        refCnts = refCnts[1]
-    
-    refCnts = ocrEngine.sortContours(refCnts, method="left-to-right")[0]
-    digits = {}
+    def calculateRectTopLeftPointAndWidthAndHeight(self):               # calculate bounding rect info
+        [intX, intY, intWidth, intHeight] = self.boundingRect
+        self.intRectX = intX
+        self.intRectY = intY
+        self.intRectWidth = intWidth
+        self.intRectHeight = intHeight
 
-    for (i, c) in enumerate(refCnts):
-        # compute the bounding box for the digit, extract it, and resize
-        # it to a fixed size
-        (x, y, w, h) = cv2.boundingRect(c)
-        roi = ref[y:y + h, x:x + w]
-        roi = cv2.resize(roi, (57, 88))
- 
-	# update the digits dictionary, mapping the digit name to the ROI
-	digits[i] = roi
+    def checkIfContourIsValid(self):                            # this is oversimplified, for a production grade program
+        if self.fltArea < MIN_CONTOUR_AREA: return False        # much better validity checking would be necessary
+        return True
 
-    # initialize a rectangular (wider than it is tall) and square
-    # structuring kernel
-    rectKernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 3))
-    sqKernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+###################################################################################################
+def main():
+    allContoursWithData = []                # declare empty lists,
+    validContoursWithData = []              # we will fill these shortly
 
-    # load the input image, resize it, and convert it to grayscale
-    image = cv2.imread("data\\input.jpg")
-    
+    try:
+        npaClassifications = np.loadtxt("classifications.txt", np.float32)                  # read in training classifications
+    except:
+        print "error, unable to open classifications.txt, exiting program\n"
+        os.system("pause")
+        return
+    # end try
 
-    image = ocrEngine.resize(image, width=300)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    try:
+        npaFlattenedImages = np.loadtxt("flattened_images.txt", np.float32)                 # read in training images
+    except:
+        print "error, unable to open flattened_images.txt, exiting program\n"
+        os.system("pause")
+        return
+    # end try
 
-    # apply a tophat (whitehat) morphological operator to find light
-    # regions against a dark background (i.e., the credit card numbers)
-    
-    tophat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, rectKernel)
+    npaClassifications = npaClassifications.reshape((npaClassifications.size, 1))       # reshape numpy array to 1d, necessary to pass to call to train
 
-    # compute the Scharr gradient of the tophat image, then scale
-    # the rest back into the range [0, 255]
-    gradX = cv2.Sobel(tophat, ddepth=cv2.CV_32F, dx=1, dy=0, ksize=-1)
-    gradX = numpy.absolute(gradX)
-    (minVal, maxVal) = (numpy.min(gradX), numpy.max(gradX))
-    gradX = (255 * ((gradX - minVal) / (maxVal - minVal)))
-    gradX = gradX.astype("uint8")
+    kNearest = cv2.ml.KNearest_create()                   # instantiate KNN object
 
-    # apply a closing operation using the rectangular kernel to help
-    # cloes gaps in between credit card number digits, then apply
-    # Otsu's thresholding method to binarize the image
-    gradX = cv2.morphologyEx(gradX, cv2.MORPH_CLOSE, rectKernel)
-    thresh = cv2.threshold(gradX, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
-    
-    # apply a second closing operation to the binary image, again
-    # to help close gaps between credit card number regions
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, sqKernel)
+    kNearest.train(npaFlattenedImages, cv2.ml.ROW_SAMPLE, npaClassifications)
 
-    # find contours in the thresholded image, then initialize the
-    # list of digit locations
-    cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    if cv2.__version__.startswith("2."):
-        cnts = cnts[0]
-    else:
-        cnts = cnts[1]
-    
-    locs = []
+    imgTestingNumbers = cv2.imread("test1.png")          # read in testing numbers image
 
-    # loop over the contours
-    for (i, c) in enumerate(cnts):
-        # compute the bounding box of the contour, then use the
-        # bounding box coordinates to derive the aspect ratio
-        (x, y, w, h) = cv2.boundingRect(c)
-        ar = w / float(h)
-    
-        # since credit cards used a fixed size fonts with 4 groups
-        # of 4 digits, we can prune potential contours based on the
-        # aspect ratio
-        if ar > 2.5 and ar < 4.0:
-            # contours can further be pruned on minimum/maximum width
-            # and height
-            if (w > 40 and w < 55) and (h > 10 and h < 20):
-                # append the bounding box region of the digits group
-                # to our locations list
-                locs.append((x, y, w, h))
+    if imgTestingNumbers is None:                           # if image was not read successfully
+        print "error: image not read from file \n\n"        # print error message to std out
+        os.system("pause")                                  # pause so user can see error message
+        return                                              # and exit function (which exits program)
+    # end if
 
-    # sort the digit locations from left-to-right, then initialize the
-    # list of classified digits
-    locs = sorted(locs, key=lambda x:x[0])
-    output = []
+    imgGray = cv2.cvtColor(imgTestingNumbers, cv2.COLOR_BGR2GRAY)       # get grayscale image
+    imgBlurred = cv2.GaussianBlur(imgGray, (5,5), 0)                    # blur
 
-    # loop over the 4 groupings of 4 digits
-    for (i, (gX, gY, gW, gH)) in enumerate(locs):
-        # initialize the list of group digits
-        groupOutput = []
-    
-        # extract the group ROI of 4 digits from the grayscale image,
-        # then apply thresholding to segment the digits from the
-        # background of the credit card
-        group = gray[gY - 5:gY + gH + 5, gX - 5:gX + gW + 5]
-        group = cv2.threshold(group, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
-    
-        # detect the contours of each individual digit in the group,
-        # then sort the digit contours from left to right
-        digitCnts = cv2.findContours(group.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                                        # filter image from grayscale to black and white
+    imgThresh = cv2.adaptiveThreshold(imgBlurred,                           # input image
+                                      255,                                  # make pixels that pass the threshold full white
+                                      cv2.ADAPTIVE_THRESH_GAUSSIAN_C,       # use gaussian rather than mean, seems to give better results
+                                      cv2.THRESH_BINARY_INV,                # invert so foreground will be white, background will be black
+                                      11,                                   # size of a pixel neighborhood used to calculate threshold value
+                                      2)                                    # constant subtracted from the mean or weighted mean
 
-        if cv2.__version__.startswith("2."):
-            digitCnts = digitCnts[0]
-        else:
-            digitCnts = digitCnts[1]
-        
-        digitCnts = ocrEngine.sortContours(digitCnts, method="left-to-right")[0]
-    
-    # loop over the digit contours
-	for c in digitCnts:
-		# compute the bounding box of the individual digit, extract
-		# the digit, and resize it to have the same fixed size as
-		# the reference OCR-A images
-		(x, y, w, h) = cv2.boundingRect(c)
-		roi = group[y:y + h, x:x + w]
-		roi = cv2.resize(roi, (57, 88))
- 
-		# initialize a list of template matching scores	
-		scores = []
- 
-		# loop over the reference digit name and digit ROI
-		for (digit, digitROI) in digits.items():
-			# apply correlation-based template matching, take the
-			# score, and update the scores list
-			result = cv2.matchTemplate(roi, digitROI, cv2.TM_CCOEFF)
-			(_, score, _, _) = cv2.minMaxLoc(result)
-			scores.append(score)
-        
-		# the classification for the digit ROI will be the reference
-		# digit name with the *largest* template matching score
-		groupOutput.append(str(numpy.argmax(scores)))
-    
-    # draw the digit classifications around the group
-	cv2.rectangle(image, (gX - 5, gY - 5), (gX + gW + 5, gY + gH + 5), (0, 0, 255), 2)
-	cv2.putText(image, "".join(groupOutput), (gX, gY - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
-    
-	# update the output digits list
-	output.extend(groupOutput)
+    imgThreshCopy = imgThresh.copy()        # make a copy of the thresh image, this in necessary b/c findContours modifies the image
 
-    # display the output credit card information to the screen
-    # print(output[0])
-    print("Credit Card #: {}".format("".join(output)))
-    cv2.imshow("Image", image)
-    cv2.waitKey(0)
+    imgContours, npaContours, npaHierarchy = cv2.findContours(imgThreshCopy,             # input image, make sure to use a copy since the function will modify this image in the course of finding contours
+                                                 cv2.RETR_EXTERNAL,         # retrieve the outermost contours only
+                                                 cv2.CHAIN_APPROX_SIMPLE)   # compress horizontal, vertical, and diagonal segments and leave only their end points
+
+    for npaContour in npaContours:                             # for each contour
+        contourWithData = ContourWithData()                                             # instantiate a contour with data object
+        contourWithData.npaContour = npaContour                                         # assign contour to contour with data
+        contourWithData.boundingRect = cv2.boundingRect(contourWithData.npaContour)     # get the bounding rect
+        contourWithData.calculateRectTopLeftPointAndWidthAndHeight()                    # get bounding rect info
+        contourWithData.fltArea = cv2.contourArea(contourWithData.npaContour)           # calculate the contour area
+        allContoursWithData.append(contourWithData)                                     # add contour with data object to list of all contours with data
+    # end for
+
+    for contourWithData in allContoursWithData:                 # for all contours
+        if contourWithData.checkIfContourIsValid():             # check if valid
+            validContoursWithData.append(contourWithData)       # if so, append to valid contour list
+        # end if
+    # end for
+
+    validContoursWithData.sort(key = operator.attrgetter("intRectX"))         # sort contours from left to right
+
+    strFinalString = ""         # declare final string, this will have the final number sequence by the end of the program
+
+    for contourWithData in validContoursWithData:            # for each contour
+                                                # draw a green rect around the current char
+        cv2.rectangle(imgTestingNumbers,                                        # draw rectangle on original testing image
+                      (contourWithData.intRectX, contourWithData.intRectY),     # upper left corner
+                      (contourWithData.intRectX + contourWithData.intRectWidth, contourWithData.intRectY + contourWithData.intRectHeight),      # lower right corner
+                      (0, 255, 0),              # green
+                      2)                        # thickness
+
+        imgROI = imgThresh[contourWithData.intRectY : contourWithData.intRectY + contourWithData.intRectHeight,     # crop char out of threshold image
+                           contourWithData.intRectX : contourWithData.intRectX + contourWithData.intRectWidth]
+
+        imgROIResized = cv2.resize(imgROI, (RESIZED_IMAGE_WIDTH, RESIZED_IMAGE_HEIGHT))             # resize image, this will be more consistent for recognition and storage
+
+        npaROIResized = imgROIResized.reshape((1, RESIZED_IMAGE_WIDTH * RESIZED_IMAGE_HEIGHT))      # flatten image into 1d numpy array
+
+        npaROIResized = np.float32(npaROIResized)       # convert from 1d numpy array of ints to 1d numpy array of floats
+
+        retval, npaResults, neigh_resp, dists = kNearest.findNearest(npaROIResized, k = 1)     # call KNN function find_nearest
+
+        strCurrentChar = str(chr(int(npaResults[0][0])))                                             # get character from results
+
+        strFinalString = strFinalString + strCurrentChar            # append current char to full string
+    # end for
+
+    print "\n" + strFinalString + "\n"                  # show the full string
+
+    cv2.imshow("imgTestingNumbers", imgTestingNumbers)      # show input image with green boxes drawn around found digits
+    cv2.waitKey(0)                                          # wait for user key press
+
+    cv2.destroyAllWindows()             # remove windows from memory
+
+    return
+
+###################################################################################################
+if __name__ == "__main__":
+    main()
+# end if
