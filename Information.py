@@ -1,21 +1,21 @@
+from Rectangle import Rectangle
+
 class Information:
 
     def __init__(self):
-        x = 0
-        y = 0
-        width = 0
-        height = 0
-        contourArea = 0.0
         self.MINIMUM_CONTOUR_AREA = 100
+        self.rectangle = Rectangle()
+        contourArea = 0.0
         contour = None
-        rectangle = None
+        boundingRectangle = None
 
     def calculateRectangle(self):
-        [x, y, width, height] = self.rectangle
-        self.x = x
-        self.y = y
-        self.width = width
-        self.height = height
+        [x, y, width, height] = self.boundingRectangle
+        
+        self.rectangle.x = x
+        self.rectangle.y = y
+        self.rectangle.width = width
+        self.rectangle.height = height
 
     def isContourValid(self):
         if self.contourArea < self.MINIMUM_CONTOUR_AREA:

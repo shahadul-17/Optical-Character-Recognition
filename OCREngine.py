@@ -3,6 +3,7 @@ import numpy as np
 import operator
 import os
 
+from Rectangle import Rectangle
 from Information import Information
 
 class OCREngine:
@@ -14,10 +15,7 @@ class OCREngine:
     kNearest = None
 
     def __init__(self):
-        self.x = 0
-        self.y = 0
-        self.width = 0
-        self.height = 0
+        self.rectangles = []        # list of valid rectangles...
         self.isRunning = False
         self.text = ""
         self.webcamImage = None
@@ -69,7 +67,7 @@ class OCREngine:
         for contour in contours:
             information = Information()
             information.contour = contour
-            information.rectangle = cv2.boundingRect(information.contour)
+            information.boundingRectangle = cv2.boundingRect(information.contour)
             information.calculateRectangle()
             information.contourArea = cv2.contourArea(information.contour)
             informations.append(information)
@@ -78,16 +76,12 @@ class OCREngine:
             if information.isContourValid():
                 validInformations.append(information)
         
-        validInformations.sort(key = operator.attrgetter("x"))         # sort contours from left to right
+        validInformations.sort(key = operator.attrgetter("rectangle.x"))         # sort contours from left to right
 
         for information in validInformations:
-            self.x = information.x
-            self.y = information.y
-            self.width = information.width
-            self.height = information.height
             # cv2.rectangle(image, (information.x, information.y), (information.x + information.width, information.y + information.height), (0, 255, 0), 2)
 
-            imgROI = imgThresh[information.y:information.y + information.height, information.x : information.x + information.width]
+            imgROI = imgThresh[information.rectangle.y:information.rectangle.y + information.rectangle.height, information.rectangle.x : information.rectangle.x + information.rectangle.width]
 
             imgROIResized = cv2.resize(imgROI, (self.RESIZED_IMAGE_WIDTH, self.RESIZED_IMAGE_HEIGHT))             # resize image, this will be more consistent for recognition and storage
 
@@ -97,14 +91,17 @@ class OCREngine:
 
             retval, npaResults, neigh_resp, dists = kNearest.findNearest(npaROIResized, k = 1)
 
-            if dists > 5000000:
+            if dists > 4712875:
                 continue
+            
+            self.rectangles.append(information.rectangle)
 
             print "=" + str(dists) + "="
             
             text = text + str(chr(int(npaResults[0][0])))            # append current char to full string
         
-        print text + "\n"
+        if len(text.strip()) != 0:
+            print text + "\n"
 
         return image
 
@@ -115,7 +112,12 @@ class OCREngine:
 
         while self.isRunning:
             returnValue, self.webcamImage = webcam.read(0)
-            cv2.rectangle(self.webcamImage, (self.x, self.y), (self.x + self.width, self.y + self.height), dodgerBlueColor, 2)   # marks characters...
+
+            for rectangle in self.rectangles:
+                # if self.x != 0 and self.y != 0 and self.width != 0 and self.height !=0:
+                cv2.rectangle(self.webcamImage, (rectangle.x, rectangle.y), (rectangle.x + rectangle.width, rectangle.y + rectangle.height), dodgerBlueColor, 2)   # marks characters...
+                self.rectangles.remove(rectangle)
+            
             self.showImage(self.webcamImage)
     
     def stopWebcam(self):
